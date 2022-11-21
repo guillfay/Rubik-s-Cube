@@ -1,0 +1,531 @@
+# on importe les fonctions de la phase 1 que l'on est susceptible d'utiliser
+from constantes import *
+from fonctions_logique import *
+from fonctions_console import *
+from projet_freecad import *
+
+import copy
+import random
+import FreeCAD
+from pathlib import Path
+# import supplémentaire car bugs
+from FreeCAD import Vector
+
+# API pour l'Interface Utilisateur
+from PySide2 import QtCore, QtGui, QtWidgets
+
+# on ouvre un nouveau fichier nommé "rubik" si aucun fichier FreeCAD est ouvert, sinon, on travaille dans celui déjà ouvert
+if FreeCAD.ActiveDocument==None:
+    doc=FreeCAD.newDocument("rubik")
+else:
+    doc=FreeCAD.ActiveDocument
+
+# pour enregistrer le fichier
+fld = 'D:/testfiles/'		
+fnm = fld + 'rubik.FCStd'
+# vérifier que le fichier existe!
+Path(fld).mkdir(parents=True, exist_ok=True)
+
+# on crée un rubik dans freecad
+rubik=[]
+rubik_objects=[]
+
+# quelques fonctions préliminaires
+#############################################################
+#fonction qui associe une couleur au code RVB, en relation avec les couleurs du fichier constantes (modifier les tuples en fonction des modifications de couleurs)
+def couleur(j): 			
+	if j==CO[0]:
+		return (0.0,0.0,0.0)
+	if j==CO[1]:
+		return (0.0,0.0,1.0)
+	if j==CO[2]:
+		return (1.0,1.0,1.0)
+	if j==CO[3]:
+		return (1.0,1.0,0.0)
+	if j==CO[4]:
+		return (0.0,1.0,0.0)
+	if j==CO[5]:
+		return (1.0,0.5,0.0)
+	if j==CO[6]:
+		return (1.0,0.0,0.0)
+
+# affiche la version 3D du rubik logique
+def afficher_rubik_3D(rubik):   
+	# on écrase le rubik 3D précédent
+	doc=FreeCAD.ActiveDocument
+	for cubelet in doc.Objects:
+		doc.removeObject(cubelet.Label)
+	
+
+	# on crée un groupe qui va recevoir les cubes
+	groupe=doc.addObject("App::DocumentObjectGroup","Groupe de cublets")	# crée un dossier pour stocker les cubelets
+	for x in range (TAILLE):
+		l1=[]
+		for y in range (TAILLE):
+			l2=[]
+			for z in range (TAILLE):
+				# créer un objet de type "Cube" sur la scène 3D
+				cube = doc.addObject("Part::Box","Cube"+str(x)+str(y)+str(z))
+				cube.Length=10
+				cube.Width=10
+				cube.Height=10
+				# couleur du cube
+				cube.ViewObject.ShapeColor=(0.0,0.0,0.0)
+				# placement sur la scène 3D
+				cube.Placement=App.Placement(App.Vector(10*x,10*y,10*z),App.Rotation(0,0,0,1))
+				# récupérer les couleurs des faces des cublets
+				cublet=FreeCAD.rubik[x][y][z]
+				face1=c(cublet,'L')
+				face2=c(cublet,'F')
+				face3=c(cublet,'U')
+				# colorier differemment les faces du cube
+				cube.ViewObject.DiffuseColor=[couleur(face1),couleur(face1),couleur(face2),couleur(face2),couleur(face3),couleur(face3)]
+				# ajouter au groupe
+				groupe.addObject(cube)
+				l2.append(cube)
+			l1.append(l2)
+		rubik_objects.append(l1)
+	# on active la vue isométrique et on affiche le cube en plein écran
+	Gui.activeDocument().activeView().viewIsometric()
+	Gui.activeDocument().activeView().fitAll()
+
+
+# permet d'appliquer un mouvement au cube 3D
+def appliquer_mouvement_3D(rubik,rubik_objects,mouv,animation):
+	# on définit le point par lequel passe l'axe de rotation comme un vecteur depuis l'origine du repère
+	centre=Vector(TAILLE*10/2,TAILLE*10/2,TAILLE*10/2)
+	# on sélctionne les faces qui doivent subir des rotations, ainsi que l'axe de cette rotation
+	if mouv[0]=='F':
+		object=[]
+		for z in range (TAILLE):
+			for x in range (TAILLE):
+				object.append(rubik_objects[x][0][z])
+		axe=Vector(0,1,0)
+	if mouv[0]=='B':
+		object=[]
+		for z in range (TAILLE):
+			for x in range (TAILLE):
+				object.append(rubik_objects[x][TAILLE-1][z])
+		axe=Vector(0,-1,0)
+	if mouv[0]=='L':
+		object=[]
+		for z in range (TAILLE):
+			for y in range (TAILLE):
+				object.append(rubik_objects[0][y][z])
+		axe=Vector(1,0,0)	
+	if mouv[0]=='R':
+		object=[]
+		for z in range (TAILLE):
+			for y in range (TAILLE):
+				object.append(rubik_objects[TAILLE-1][y][z])
+		axe=Vector(-1,0,0)
+	if mouv[0]=='D':
+		object=[]
+		for y in range (TAILLE):
+			for x in range (TAILLE):
+				object.append(rubik_objects[x][y][0])
+		axe=Vector(0,0,1)
+	if mouv[0]=='U':
+		object=[]
+		for y in range (TAILLE):
+			for x in range (TAILLE):
+				object.append(rubik_objects[x][y][TAILLE-1])
+		axe=Vector(0,0,-1)
+	# on choisit l'angle de rotation selon la nature du mouvement
+	if mouv[1]==True:
+		angle=90
+	if mouv[1]==False:
+		angle=-90
+	if mouv[2]==True:
+		angle=180
+	# on applique la rotation
+	Draft.rotate(object,angle,centre,axe,False)
+	
+	# on change la liste qui contient les cublets (on applique le mouvement sans réorienter les cublets
+	face_extraite=extraire(rubik_objects,mouv[0])
+	nouvelle_face=appliquer_rotation(face_extraite,mouv[1],mouv[2])
+	rubik_objects = reimplanter(rubik_objects,mouv[0],nouvelle_face)
+
+	# on applique le mouvement au cube logique
+	FreeCAD.rubik=appliquer_mouvement(rubik,mouv)
+
+def appliquer_suite_mouvements_3D(rubik,rubik_objects,ms):
+	ms=str(ms)
+	mouvs=mouvements(ms)
+	FreeCAD.Console.PrintMessage(mouvs)
+	for mouv in mouvs:
+		appliquer_mouvement_3D(rubik,rubik_objects,mouv,True)
+
+# on crée une interface utilisateur
+#######################################################
+
+# Un exemple basique d'interface utilisateur
+class TestWidget(object):
+
+	# la méthode appelée lors d'un clic sur un bouton
+	def exemple(self):
+		couleur(1)
+
+	def generer_rubik_termine_3D(self):
+		# on initialise un cube 2D terminé
+		FreeCAD.rubik=generer_rubik_termine()
+		# on affiche ce cube en 3D
+		afficher_rubik_3D(FreeCAD.rubik)
+
+
+	def generer_rubik_3D(self):
+		a=self.lineEditnb_mv.text()
+		a=int(a)
+		b=generer_rubik(a)
+		FreeCAD.rubik=b[0]
+		mv=b[1]
+		FreeCAD.Console.PrintMessage("Mouvements effectués :")
+		FreeCAD.Console.PrintMessage(scramble(mv))
+		"""FreeCAD.Console.PrintMessage("Mouvements effectués :",scramble(mv))"""
+		afficher_rubik_3D(FreeCAD.rubik)
+
+	def quit(self):				#Fonction qui permet de finir le jeu
+		FreeCAD.closeDocument("rubik")
+		window.removeDockWidget(dock)
+
+	def front(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('F',True,False),True)
+	
+	def front_p(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('F',False,False),True)
+
+	def front_2(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('F',True,True),True)
+	
+	def back(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('B',True,False),True)
+
+	def back_p(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('B',False,False),True)
+
+	def back_2(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('B',True,True),True)
+
+	def left(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('L',True,False),True)
+
+	def left_p(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('L',False,False),True)
+
+	def left_2(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('L',True,True),True)
+
+	def right(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('R',True,False),True)
+
+	def right_p(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('R',False,False),True)
+
+	def right_2(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('R',True,True),True)
+
+	def down(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('D',True,False),True)
+
+	def down_p(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('D',False,False),True)
+
+	def down_2(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('D',True,True),True)
+	
+	def up(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('U',True,False),True)
+
+	def up_p(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('U',False,False),True)
+
+	def up_2(self):
+		appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,('U',True,True),True)
+
+	def m_3D(self):
+		ms=self.lineEditsuite_mv.text()
+		mouvs=mouvements(ms)
+		for mouv in mouvs:
+			appliquer_mouvement_3D(FreeCAD.rubik,rubik_objects,mouv,True)
+
+	def enregistrer(self):
+		doc.saveAs(fnm)
+
+	def gagne(self):
+		if FreeCAD.rubik==generer_rubik_termine():
+			FreeCAD.Console.PrintMessage("Vous avez gagné, Bravo!")
+		else:
+			FreeCAD.Console.PrintMessage("Dommage, essayez encore!")
+			
+			
+		
+		
+		
+			
+		
+		
+
+
+
+		
+
+
+
+	# initialiser l'IU
+	def init(self, parent):
+		parent.setWindowTitle("Rubik's Cube")
+
+		self.principal = QtWidgets.QWidget(parent)
+		self.principal.setGeometry(QtCore.QRect(0, 20, 300, 550))
+
+		# QT fonctionne sur le principe des layouts pour la présentation des éléments (voir doc)
+		# ici un layout vertical ordonne les éléments en colonne
+		self.colonne = QtWidgets.QVBoxLayout(self.principal)
+
+# EFFECTUER UNE ACTION
+		#Titre section
+		self.texte_action = QtWidgets.QLabel(self.principal)
+		self.texte_action.setText("Actions:")
+		self.colonne.addWidget(self.texte_action)
+
+		#Création des boutons
+		self.grille_actions=QtWidgets.QGridLayout(self.principal)
+
+
+		self.btF_horaire=QtWidgets.QPushButton(self.principal)
+	#	self.btF_horaire.setGeometry(QtCore.QRect(QtCore.QPoint(0,55), QtCore.QSize(75,200)))
+		self.btF_horaire.move(55,100)
+		self.btF_horaire.setEnabled(True)
+		self.btF_horaire.setText("F")
+		self.btF_horaire.clicked.connect(self.front)
+		self.grille_actions.addWidget(self.btF_horaire,0,0)
+		
+		self.btF_anti_horaire=QtWidgets.QPushButton(self.principal)
+		self.btF_anti_horaire.setEnabled(True)
+		self.btF_anti_horaire.setText("F '")
+		self.btF_anti_horaire.clicked.connect(self.front_p)
+		self.grille_actions.addWidget(self.btF_anti_horaire,1,0)
+
+		self.btF_demi_tour=QtWidgets.QPushButton(self.principal)
+		self.btF_demi_tour.setEnabled(True)
+		self.btF_demi_tour.setText("F 2")
+		self.btF_demi_tour.clicked.connect(self.front_2)
+		self.grille_actions.addWidget(self.btF_demi_tour,2,0)
+
+		self.btB_horaire=QtWidgets.QPushButton(self.principal)
+		self.btB_horaire.setEnabled(True)
+		self.btB_horaire.setText("B")
+		self.btB_horaire.clicked.connect(self.back)
+		self.grille_actions.addWidget(self.btB_horaire,0,1)
+
+		self.btB_anti_horaire=QtWidgets.QPushButton(self.principal)
+		self.btB_anti_horaire.setEnabled(True)
+		self.btB_anti_horaire.setText("B '")
+		self.btB_anti_horaire.clicked.connect(self.back_p)
+		self.grille_actions.addWidget(self.btB_anti_horaire,1,1)
+
+		self.btB_demi_tour=QtWidgets.QPushButton(self.principal)
+		self.btB_demi_tour.setEnabled(True)
+		self.btB_demi_tour.setText("B 2")
+		self.btB_demi_tour.clicked.connect(self.back_2)
+		self.grille_actions.addWidget(self.btB_demi_tour,2,1)
+
+		self.btL_horaire=QtWidgets.QPushButton(self.principal)
+		self.btL_horaire.setEnabled(True)
+		self.btL_horaire.setText("L")
+		self.btL_horaire.clicked.connect(self.left)
+		self.grille_actions.addWidget(self.btL_horaire,0,2)
+
+		self.btL_anti_horaire=QtWidgets.QPushButton(self.principal)
+		self.btL_anti_horaire.setEnabled(True)
+		self.btL_anti_horaire.setText("L '")
+		self.btL_anti_horaire.clicked.connect(self.left_p)
+		self.grille_actions.addWidget(self.btL_anti_horaire,1,2)
+
+		self.btL_demi_tour=QtWidgets.QPushButton(self.principal)
+		self.btL_demi_tour.setEnabled(True)
+		self.btL_demi_tour.setText("L 2")
+		self.btL_demi_tour.clicked.connect(self.left_2)
+		self.grille_actions.addWidget(self.btL_demi_tour,2,2)
+
+		self.btR_horaire=QtWidgets.QPushButton(self.principal)
+		self.btR_horaire.setEnabled(True)
+		self.btR_horaire.setText("R")
+		self.btR_horaire.clicked.connect(self.right)
+		self.grille_actions.addWidget(self.btR_horaire,0,3)
+
+		self.btR_anti_horaire=QtWidgets.QPushButton(self.principal)
+		self.btR_anti_horaire.setEnabled(True)
+		self.btR_anti_horaire.setText("R '")
+		self.btR_anti_horaire.clicked.connect(self.right_p)
+		self.grille_actions.addWidget(self.btR_anti_horaire,1,3)
+
+		self.btR_demi_tour=QtWidgets.QPushButton(self.principal)
+		self.btR_demi_tour.setEnabled(True)
+		self.btR_demi_tour.setText("R 2")
+		self.btR_demi_tour.clicked.connect(self.right_2)
+		self.grille_actions.addWidget(self.btR_demi_tour,2,3)
+
+		self.btU_horaire=QtWidgets.QPushButton(self.principal)
+		self.btU_horaire.setEnabled(True)
+		self.btU_horaire.setText("U")
+		self.btU_horaire.clicked.connect(self.up)
+		self.grille_actions.addWidget(self.btU_horaire,0,4)
+
+		self.btU_anti_horaire=QtWidgets.QPushButton(self.principal)
+		self.btU_anti_horaire.setEnabled(True)
+		self.btU_anti_horaire.setText("U '")
+		self.btU_anti_horaire.clicked.connect(self.up_p)
+		self.grille_actions.addWidget(self.btU_anti_horaire,1,4)
+
+		self.btU_demi_tour=QtWidgets.QPushButton(self.principal)
+		self.btU_demi_tour.setEnabled(True)
+		self.btU_demi_tour.setText("U 2")
+		self.btU_demi_tour.clicked.connect(self.up_2)
+		self.grille_actions.addWidget(self.btU_demi_tour,2,4)
+
+		self.btD_horaire=QtWidgets.QPushButton(self.principal)
+		self.btD_horaire.setEnabled(True)
+		self.btD_horaire.setText("D")
+		self.btD_horaire.clicked.connect(self.down)
+		self.grille_actions.addWidget(self.btD_horaire,0,5)
+
+		self.btD_anti_horaire=QtWidgets.QPushButton(self.principal)
+		self.btD_anti_horaire.setEnabled(True)
+		self.btD_anti_horaire.setText("D '")
+		self.btD_anti_horaire.clicked.connect(self.down_p)
+		self.grille_actions.addWidget(self.btD_anti_horaire,1,5)
+
+		self.btD_demi_tour=QtWidgets.QPushButton(self.principal)
+		self.btD_demi_tour.setEnabled(True)
+		self.btD_demi_tour.setText("D 2")
+		self.btD_demi_tour.clicked.connect(self.down_2)
+		self.grille_actions.addWidget(self.btD_demi_tour,2,5)
+
+		self.colonne.addLayout(self.grille_actions)
+
+
+		"""#L'utilisateur donne une suite de mouvements
+		self.reponse_mvts = QtWidgets.QWidget(self.principal)
+		self.reponse_mvtslayout = QtWidgets.QHBoxLayout(self.reponse_mvts)
+		self.colonne.addWidget(self.reponse_mvts)
+		self.mvts = QtWidgets.QLabel(self.principal)
+		self.mvts.setText("Suite de mouvements : ")
+		self.reponse_mvtslayout.addWidget(self.mvts)
+		
+		self.text_mvts = QtWidgets.QLineEdit(self.principal)
+		self.text_mvts.setMaxLength(100)
+		self.text_mvts.setObjectName("text_mvts")
+		self.reponse_mvtslayout.addWidget(self.text_mvts)
+
+		#Bouton pour effectuer ces mouvements
+		self.bouton_mvts= QtWidgets.QPushButton(self.principal)
+		self.bouton_mvts.setEnabled(True)
+		self.bouton_mvts.setText("Effectuer la suite de mouvements")
+		self.bouton_mvts.clicked.connect(self.m_3D)
+		self.colonne.addWidget(self.bouton_mvts)"""
+
+		#Titre section
+		self.texte_suite_mv = QtWidgets.QLabel(self.principal) #création du label
+		self.texte_suite_mv.setText("Suite de mouvements : ")
+		self.colonne.addWidget(self.texte_suite_mv)
+
+		self.saut_ligne0 = QtWidgets.QLabel(self.principal) #création du label
+		self.saut_ligne0.setText(" ")
+		self.colonne.addWidget(self.saut_ligne0)
+		
+		#L'utilisateur donne le nombre de mvts souhaité
+		self.lineEditsuite_mv=QtWidgets.QLineEdit(parent)
+		self.lineEditsuite_mv.setGeometry(QtCore.QRect(10,200,100,20))
+		self.lineEditsuite_mv.setObjectName("lineEditsuite_mv")
+
+		#Bouton pour effectuer ces mouvements
+		self.bouton_mvts= QtWidgets.QPushButton(self.principal)
+		self.bouton_mvts.setEnabled(True)
+		self.bouton_mvts.setText("Effectuer la suite de mouvements")
+		self.bouton_mvts.clicked.connect(self.m_3D)
+		self.colonne.addWidget(self.bouton_mvts)
+
+
+# CHOIX DU NOMBRE DE MOUVEMENTS POUR LE MELANGE
+		#Titre section
+		self.texte_nb_mv = QtWidgets.QLabel(self.principal) #création du label
+		self.texte_nb_mv.setText("Nombre de mouvements pour mélanger:")
+		self.colonne.addWidget(self.texte_nb_mv)
+
+		self.saut_ligne1 = QtWidgets.QLabel(self.principal) #création du label
+		self.saut_ligne1.setText(" ")
+		self.colonne.addWidget(self.saut_ligne1)
+		
+		#L'utilisateur donne le nombre de mvts souhaité
+		self.lineEditnb_mv=QtWidgets.QLineEdit(parent)
+		self.lineEditnb_mv.setGeometry(QtCore.QRect(10,325,100,20))
+		self.lineEditnb_mv.setObjectName("lineEditnb_mv")
+
+
+# GENERER UN CUBE
+		#Titre section
+		self.texte_generer = QtWidgets.QLabel(self.principal)
+		self.texte_generer.setText("Génerer un rubik:")
+		self.colonne.addWidget(self.texte_generer)
+
+		# créer un bouton et l'associer à une fonction (qui est dans init)
+		self.bouton_cube_termine= QtWidgets.QPushButton(self.principal)
+		self.bouton_cube_termine.setEnabled(True)
+		self.bouton_cube_termine.setText("Générer un rubik terminé")
+		self.bouton_cube_termine.clicked.connect(self.generer_rubik_termine_3D)
+		self.colonne.addWidget(self.bouton_cube_termine)
+		
+		self.bouton_cube_melange= QtWidgets.QPushButton(self.principal)
+		self.bouton_cube_melange.setEnabled(True)
+		self.bouton_cube_melange.setText("Générer un rubik mélangé")
+		self.bouton_cube_melange.clicked.connect(self.generer_rubik_3D)
+		self.colonne.addWidget(self.bouton_cube_melange)
+
+
+
+		
+# EFFECTUER UNE VERIFICATION
+		#Titre section
+		self.texte_verification = QtWidgets.QLabel(self.principal)
+		self.texte_verification.setText("Vérifications:")
+		self.colonne.addWidget(self.texte_verification)
+
+    # VERIFICATION RUBIK
+		self.bouton_verif_rubik= QtWidgets.QPushButton(self.principal)
+		self.bouton_verif_rubik.setEnabled(True)
+		self.bouton_verif_rubik.setText("Victoire?")
+		self.bouton_verif_rubik.clicked.connect(self.gagne)
+		self.colonne.addWidget(self.bouton_verif_rubik)
+
+	#Arrêter le jeu
+		self.bouton_stop_jeu= QtWidgets.QPushButton(self.principal)
+		self.bouton_stop_jeu.setEnabled(True)
+		self.bouton_stop_jeu.setText("Arrêter le jeu")
+		self.bouton_stop_jeu.clicked.connect(self.quit)
+		self.colonne.addWidget(self.bouton_stop_jeu)
+
+	#Enregistrer
+		self.bouton_enregistrer_jeu= QtWidgets.QPushButton(self.principal)
+		self.bouton_enregistrer_jeu.setEnabled(True)
+		self.bouton_enregistrer_jeu.setText("Enregistrer dans D:/testfiles/")
+		self.bouton_enregistrer_jeu.clicked.connect(self.enregistrer)
+		self.colonne.addWidget(self.bouton_enregistrer_jeu)
+
+		return
+
+# exemple de création d'un dock QT contenant notre IU
+# voir la documentation FreeCAD / QT-GUI
+dock = QtWidgets.QDockWidget()
+ui = TestWidget()
+ui.init(dock)
+window = QtWidgets.QApplication.activeWindow()
+window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+
+
+
+
+
+
+
+
